@@ -1,0 +1,98 @@
+[project]
+name = "dunetrg"
+version = "0.1.0"
+description = "DUNE trigger-primitive libraries: data model, trigger emulation and analysis"
+readme = "README.md"
+authors = [
+    { name = "Alessandro Thea", email = "alessandro.thea@cern.ch" }
+]
+requires-python = ">=3.13"
+
+# Core install covers dunetrg.data. The other two submodules bring their own
+# stacks, kept out of the base install so a batch job or a data-only consumer
+# stays light.
+dependencies = [
+    "awkward>=2.8.3",
+    "numpy>=2.3.4",
+    "pandas>=2.2.3",
+    "pydantic>=2.12.5",
+    "pyyaml>=6.0",
+    "rich>=14.1.0",
+    "uproot>=5.6.2",
+]
+
+[project.optional-dependencies]
+emu = [
+    "click>=8.2.1",
+    "numba>=0.63.1",
+    "scikit-learn>=1.8.0",
+    "scipy>=1.16.0",
+    "tqdm>=4.67.1",
+]
+analysis = [
+    "boost-histogram>=1.5.2",
+    "click>=8.2.1",
+    "cmocean>=4.0.3",
+    "hist>=2.9.0",
+    "matplotlib>=3.10.3",
+    "mpl-axes-aligner>=1.3",
+    "mplhep>=0.4.0",
+    "particle>=0.26.0",
+]
+all = ["dunetrg[emu,analysis]"]
+
+[project.scripts]
+ta-finder = "dunetrg.emu.cli.tafinder:main"      # needs the [emu] extra
+tawin-util = "dunetrg.analysis.cli.tawinutil:main"  # needs the [analysis] extra
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dunetrg"]
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.15",
+    "pytest>=8.4.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+# importlib import mode: test/data and test/analysis both have test_utils.py,
+# which the default "prepend" mode cannot import side by side.
+addopts = "--import-mode=importlib"
+
+# The submodule boundaries that used to be repository boundaries. Direction:
+# analysis -> data, emu -> data; analysis and emu never import each other.
+[tool.importlinter]
+root_packages = ["dunetrg"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "data: no imports from emu or analysis, or matplotlib"
+type = "forbidden"
+source_modules = ["dunetrg.data"]
+forbidden_modules = ["dunetrg.emu", "dunetrg.analysis", "matplotlib"]
+
+[[tool.importlinter.contracts]]
+name = "geometry: no imports from rootio/workspace/datacatalogue, or uproot/awkward/pandas"
+type = "forbidden"
+source_modules = ["dunetrg.data.geometry"]
+forbidden_modules = ["dunetrg.data.rootio", "dunetrg.data.workspace", "dunetrg.data.datacatalogue", "uproot", "awkward", "pandas"]
+
+[[tool.importlinter.contracts]]
+name = "emu: no imports from analysis, and no plotting stack"
+type = "forbidden"
+source_modules = ["dunetrg.emu"]
+forbidden_modules = ["dunetrg.analysis", "matplotlib", "hist", "mplhep"]
+
+[[tool.importlinter.contracts]]
+name = "analysis: no imports from emu"
+type = "forbidden"
+source_modules = ["dunetrg.analysis"]
+forbidden_modules = ["dunetrg.emu"]

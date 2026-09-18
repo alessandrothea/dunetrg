@@ -1,0 +1,475 @@
+
+from dunetrg.data.workspace import TriggerPrimitivesWorkspace
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import hist
+import mplhep as hep
+import copy
+
+from typing import Literal, Optional
+from rich.table import Table
+from matplotlib.colors import LogNorm
+
+from dunetrg.data.geometry.detgeometry import FDVDGeometry_1x8x14, get_by_geocfg_id
+from dunetrg.analysis.histograms import compute_regaxis_specs, cumsum_hist_nd, build_histogram, make_intcat_axis, make_strcat_axis
+from .textual import dataframe_to_rich_table
+
+
+
+
+
+class TrgPrimitivesPlotter:
+    
+    _electronics_noise_label : str = 'DetSimElecNoise'
+    _default_var_specs = {
+        'adc_peak': {'name':'adc_peak', 'bin_size':10},
+        'samples_over_threshold': {'name':'samples_over_threshold', 'bin_size': 1, 'type': 'int'},
+        'adc_integral': {'name':'adc_integral', 'bin_size': 10}
+    }
+
+    def __init__(
+        self,
+        ws: TriggerPrimitivesWorkspace,
+        # geo: Literal['1x8x14']='1x8x14'
+    ):
+        """Initialise the plotter.
+
+        Parameters
+        ----------
+        ws:
+            Workspace instance.
+
+        """
+        self.ws = ws
+        
+        # Shortcut
+        self._df = ws.tps
+
+        # Initialize block map
+        self._init_tp_origin_block_map()
+
+        # Initialize geometry
+        self._geo = get_by_geocfg_id(ws.info['geo']['detector'])
+
+        # Make initialize var specs to allow tweaking
+        self.var_specs = copy.deepcopy(self._default_var_specs)
+    
+
+    @property
+    def geo(self):
+        return self._geo
+
+    def simulated_time(self) -> float:
+        """Return total simulated time in seconds.
+
+        Computed as ``2 × readout_window × num_entries × 0.5 µs``, where the
+        factor of 2 accounts for pre- and post-spill readout windows.
+        Always derived from ``ws.mctruths`` regardless of the active
+        collection.
+        """
+        
+        sampling_time = 0.5e-6  # Sampling time 1/2 usec
+        print(self.ws.info)
+        ro_win = self.ws.info['detector_properties']['readout_window']
+        num_entries = self.ws.num_entries
+        return ro_win * sampling_time * num_entries
+
+    def _init_tp_origin_block_map(self):
+        """Initialize the tp origin block registry
+
+        The origin is either a MC sample (backtracked TPs)
+        or "DetectorElectronics" (non-backtracked TPs)
+        """
+        block_map = self.ws.mctruth_blocks_map.copy()
+        block_map[-99999] = self._electronics_noise_label
+        self.block_map = block_map
+
+    def _get_cat_axis_list(self, df:pd.DataFrame, categories: list[str]) -> list[hist.axis.AxisProtocol]:
+
+        # Static map of known category axis maker
+        cat_makers_map = {
+            'readout_plane_id': lambda df: make_intcat_axis(df, 'readout_plane_id', label='Readout Plane'),
+            'bt_is_signal': lambda df: make_intcat_axis(df, 'bt_is_signal', label='Noise/Signal'),
+            'bt_generator_name': lambda df: make_strcat_axis(df, 'bt_generator_name', label='Generator')
+        }
+        h_spec = []
+        for cat in categories:
+            maker = cat_makers_map.get(cat, None)
+
+            if maker is None:
+                raise ValueError(f"Category {cat} not known")
+            h_spec.append(maker(df))
+
+                
+        return h_spec
+    
+    def _apply_event_filter(self, df, event_filter:dict):
+        evf_collection = event_filter['collection']
+        evf_filter = event_filter['filter']
+
+        coll = self.ws.get_df(evf_collection)
+
+        ev_uids = coll.query(evf_filter).event_uid.unique()
+        df = df[df.event_uid.isin(ev_uids)]
+
+        return df
+
+    def make_hist(self,
+                var_spec:list[dict|str]|dict|str=[],
+                categories: list[str]=['readout_plane_id'],
+                weight: Optional[str]=None,
+                query: Optional[str]=None,
+                event_filter: Optional[dict]=None
+            ):
+        """Build a boost-histogram from the TP dataframe.
+
+        Args:
+            var_spec: Variable(s) to histogram. Each entry is either a string key
+                into ``self.var_specs`` or a dict with keys ``name``, ``bin_size``,
+                and optionally ``label`` and ``type``. A single dict is accepted
+                in place of a one-element list.
+            categories: Column names to use as categorical axes. Defaults to
+                ``['readout_plane_id']``.
+            weight: Column name whose values are used as per-entry weights.
+            query: Pandas query string applied to the dataframe before filling.
+            event_filter: Restrict entries to events that pass a filter on a
+                different collection. Dict with keys ``'collection'`` (name passed
+                to ``ws.get_df()``) and ``'filter'`` (query string applied to that
+                collection); only rows whose ``event_uid`` appears in the filtered
+                collection are kept.
+
+        Returns:
+            boost_histogram.Histogram with one categorical axis per category and
+            one regular axis per variable.
+        """
+        df = self._df
+
+        # TODO: generalize
+        if event_filter:
+
+            df = self._apply_event_filter(df, event_filter)
+
+
+        if query:
+            df = df.query(query)
+
+        h_spec = self._get_cat_axis_list(df, categories)
+
+        if isinstance(var_spec, dict):
+            var_spec = [var_spec]
+
+        for vs in var_spec:
+            if isinstance(vs, str):
+                vs = self.var_specs.get(vs)
+
+            v_name = vs['name']
+            v_bin_size = vs['bin_size']
+            v_label = vs.get('label', v_name)
+            v_type = vs.get('type', 'float')
+            
+            n_bins, xmin, xmax = compute_regaxis_specs(df[v_name], v_bin_size, binning_type=v_type)
+
+            var_axis = hist.axis.Regular( n_bins, xmin, xmax, name=v_name, label=v_label)
+
+            h_spec.append(var_axis)
+
+        h = build_histogram(df, h_spec, weight=weight)
+        return h
+        
+
+    
+    def make_var_hist(self, var:str, var_binsize: int, **kwargs):
+
+        """Build and fill a 3-axis histogram over readout plane, backtracker signal flag, and a TP variable.
+
+        The variable axis is a regularly-spaced ``hist.axis.Regular`` whose range and
+        number of bins are derived automatically from the data via
+        ``compute_regaxis_specs``.
+
+        Args:
+            var: Column name in the TP dataframe to use as the third axis.
+            var_binsize: Bin width for the regular axis (same units as the column).
+
+        Returns:
+            hist.Hist: Filled histogram with axes ``[readout_plane_id, bt_is_signal, var]``.
+        """
+
+        var_spec={'name':var, 'bin_size':var_binsize, 'label':var}
+        return self.make_hist(var_spec=var_spec, categories=['readout_plane_id', 'bt_is_signal'], **kwargs)
+    
+    
+
+    # def make_cutsequence_hist_legacy(self, var:str, cuts: list[float], weight:str=None, ):
+    #     """Build a cumulative histogram over a variable-width cut sequence.
+
+    #     Creates a 3-axis histogram (readout plane, backtracker signal flag, variable)
+    #     using explicit bin edges defined by ``cuts``, then computes the right-to-left
+    #     cumulative sum so each bin gives the count surviving that threshold and above.
+
+    #     Args:
+    #         var: Column name in the TP dataframe to use as the cut-sequence axis.
+    #         cuts: Explicit bin edges for the variable axis (monotonically increasing).
+
+    #     Returns:
+    #         hist.Hist: Cumulative histogram with axes ``[readout_plane_id, bt_is_signal, var]``,
+    #             where each bin contains the count of entries with ``var >= bin_lower_edge``.
+    #     """
+
+    #     var_axis = hist.axis.Variable(cuts, name=var)
+
+    #     rop_axis = make_intcat_axis(self._df, 'readout_plane_id', label='Readout Plane')
+    #     bt_sig_axis = make_intcat_axis(self._df, 'bt_is_signal', label='Noise/Signal')
+
+    #     h_spec = [rop_axis, bt_sig_axis, var_axis]
+    #     h = build_histogram(self._df, h_spec, weight=weight)
+
+    #     # Calculate the cumulative histogram
+    #     h_cs = cumsum_hist_nd(h, var, direction='right')
+
+    #     return h_cs
+    
+    def make_cutsequence_hist(self,
+                            cut_var:str,
+                            cuts: list[float],
+                            categories:list[str]=['readout_plane_id', 'bt_is_signal'],
+                            weight: Optional[str]=None,
+                            query: Optional[str]=None,
+                            event_filter: Optional[dict]=None
+                            ):
+        
+        df = self._df
+
+        # TODO: generalize
+        if event_filter:
+            # evf_collection = event_filter['collection']
+            # evf_filter = event_filter['filter']
+
+            # coll = self.ws.get_df(evf_collection)
+
+            # ev_uids = coll.query(evf_filter).event_uid.unique()
+            # df = df[df.event_uid.isin(ev_uids)]
+            df = self._apply_event_filter(df, event_filter)
+
+        if query:
+            df = df.query(query)
+
+        h_spec = self._get_cat_axis_list(df, categories)
+        h_spec.append(
+            hist.axis.Variable(cuts, name=cut_var)
+        )
+        h = build_histogram(df, h_spec, weight=weight)
+
+        # Calculate the cumulative histogram
+        h_cs = cumsum_hist_nd(h, cut_var, direction='right')
+
+        return h_cs
+
+
+    def make_generator_counts_hist(self, query: Optional[str] = None) -> hist.Hist:
+        """Return a 1D StrCategory hist of generator counts for the active collection.
+
+        For ``mctruths`` the groups are keyed by ``generator_name``.  For
+        ``mcparticles`` they are keyed by ``truth_block_id`` resolved via
+        ``ws.mctruth_blocks_map``.
+
+        Parameters
+        ----------
+        cut:
+            Optional pandas cut string applied to the DataFrame before
+            filling (e.g. ``'pdg == 11'`` to select electrons only).
+        """
+
+        return self.make_hist(categories=['bt_generator_name', 'readout_plane_id'], query=query)
+    
+
+    def make_generator_activity_table(self,
+                                    query: Optional[str] = None,
+                                    norm: Literal['counts', 'rate'] = 'rate',
+                                    geo_norm: Literal['default', 'crp', 'tpc'] = 'default'
+                                    ) -> Table:
+        """Return a rich Table of generator activity, ranked by count or rate.
+
+        Parameters
+        ----------
+        query:
+            Optional pandas query string applied before histogramming.
+        norm:
+            ``'counts'`` to show raw hit counts; ``'rate'`` to normalise by
+            simulated time and express in Hz (default).
+        geo_norm:
+            Geometric normalisation applied on top of ``norm``: ``'default'``
+            uses the full simulation volume (no extra factor), ``'crp'``
+            divides by the number of CRPs, ``'tpc'`` divides by the number of
+            TPCs.
+
+        Returns
+        -------
+        rich.table.Table
+            Rows are sorted by the normalised value in descending order.
+            Unlabelled entries (electronics noise) are shown as
+            ``'ElecNoise'``.
+        """
+        simu_time = self.simulated_time()
+
+        h_counts = self.make_generator_counts_hist(query)
+
+
+        # TODO: The norm and geo norm handling is general. Refactor in a separate method
+        match norm:
+            case 'counts':
+                norm_unit = 1.
+                col_name = 'counts'
+                fmts = {
+                    col_name:'{:.2f}'
+                }
+                fmts.update({
+                    f"{col_name}_rop{rop}":'{:.2f}' for rop in range(self.geo.num_readout_planes)
+                })
+            case 'rate':
+                norm_unit = 1./ simu_time
+                col_name = 'rate'
+                fmts = {
+                    col_name:'{:.2f} Hz'
+                }
+                fmts.update({
+                    f"{col_name}_rop{rop}":'{:.2f} Hz' for rop in range(self.geo.num_readout_planes)
+                })
+            case _:
+                raise ValueError(f'Invalid normalisation {norm}')
+        
+        match geo_norm:
+            case 'default':
+                # use the simulation geometry
+                norm_geo = 1.
+            case 'crp':
+                norm_geo = 1./self.geo.num_crps                
+            case 'tpc':
+                norm_geo = 1./self.geo.num_tpcs
+            case _:
+                raise ValueError(f"Invalid 'detgeo' parameter {geo_norm}")
+
+        h_counts *= norm_unit*norm_geo
+        det_name = self.geo.name if geo_norm=='default' else geo_norm
+
+        cols = {
+            'generator': [l if len(l) > 0 else self._electronics_noise_label for l in h_counts.axes[0]],
+            col_name: h_counts[:,sum].values()
+            }
+        cols.update({
+                f"{col_name}_rop{rop}":h_counts[:,rop*1j].values() for rop in range(self.geo.num_readout_planes)
+            })
+
+        c_df = pd.DataFrame(cols)
+        
+
+        return dataframe_to_rich_table(c_df.sort_values(col_name, ascending=False),show_index=True, formatters=fmts, title=f'Rates per generator ({det_name})')
+
+
+    def plot_var_by_generator(self,
+                            var_spec:dict|str,
+                            rop: int,
+                            n_top: int=10,
+                            norm: Literal['counts', 'rate'] = 'counts',
+                            geo_norm: Literal['default', 'crp', 'tpc'] = 'default',
+                            query: Optional[str] = None,
+                            ax: Optional[object] = None,
+                            **fig_kwargs
+        ):
+        """Plot a TP variable distribution broken down by backtracked generator.
+
+        Parameters
+        ----------
+        var_spec:
+            Variable specification dict passed to :meth:`make_hist` (keys: ``var``,
+            ``bins``, ``range``, and optionally ``label``).
+        rop:
+            Readout-plane index to select (sliced from the 2-D histogram).
+        n_top:
+            Number of top generators to show, ranked by total counts (default 10).
+        query:
+            Optional pandas query string applied before histogramming.
+        **kwargs:
+            Extra keyword arguments forwarded to ``plt.subplots``.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+
+        if isinstance(var_spec, str):
+            var_spec = self.var_specs[var_spec]
+
+        h_var = self.make_hist(query=query, var_spec=var_spec, categories=['bt_generator_name', 'readout_plane_id'])
+
+        match norm:
+            case 'counts':
+                clabel = 'counts'
+                title_units = 'counts'
+                norm_unit = 1
+            case 'rate':
+                clabel = 'Rates [Hz]'
+                title_units = 'rates'
+                norm_unit = 1 / self.simulated_time()
+            case _:
+                raise RuntimeError(f"norm ({norm!r}) must be 'counts' or 'rate'")
+            
+        match geo_norm:
+            case 'default':
+                # use the simulation geometry
+                norm_geo = 1.
+            case 'crp':
+                norm_geo = 1./self.geo.num_crps                
+            case 'tpc':
+                norm_geo = 1./self.geo.num_tpcs
+            case _:
+                raise ValueError(f"Invalid 'detgeo' parameter {geo_norm}")
+            
+        h_var *= norm_unit*norm_geo
+
+        h2_var = h_var[{'readout_plane_id':rop}]
+        s = h2_var.stack("bt_generator_name")
+
+        h_top = sorted([h for h in s], key=lambda x: x.sum(), reverse=True)[:n_top]
+
+        if 'figsize' not in fig_kwargs:
+            fig_kwargs['fig_size'] = (8,5)
+
+        create_fig = ax is None
+        fig, ax = plt.subplots(**fig_kwargs) if create_fig else (ax.figure, ax)
+
+        for h in h_top:
+            hep.histplot(h, ax=ax, label=h.name if h.name else self._electronics_noise_label, yerr=False)
+
+        # s.plot(ax=ax)
+        ax.legend()
+        ax.set_ylabel(clabel)
+        ax.set_yscale('log')
+        
+        
+        if create_fig:
+            fig.tight_layout()
+        return fig
+    
+
+    def plot_2d_var_dist(self, var_spec_x, var_spec_y, rop=2, weight=None, cmap:str=None, bt_generator_name:str=None, ev_filter:dict=None, ax=None, 
+                                **fig_kwargs
+                        ):
+        # histogram categories
+        cats = ['readout_plane_id', 'bt_is_signal', 'bt_generator_name']
+
+        h = self.make_hist(var_spec=[var_spec_x, var_spec_y], categories=cats, weight=weight, event_filter=ev_filter)
+
+        create_fig = ax is None
+        fig, ax = plt.subplots(**fig_kwargs) if create_fig else (ax.figure, ax)
+
+        bt_gen = bt_generator_name if bt_generator_name else sum
+
+        artists = hep.hist2dplot(h[rop*1j,1j,bt_gen,:,:], norm=LogNorm(), cmap=cmap, ax=ax)
+        artists.cbar.set_label("Counts")
+
+        if create_fig:
+            fig.tight_layout()
+        return fig
+
