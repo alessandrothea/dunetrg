@@ -71,7 +71,6 @@ class TrgPrimitivesPlotter:
         """
         
         sampling_time = 0.5e-6  # Sampling time 1/2 usec
-        print(self.ws.info)
         ro_win = self.ws.info['detector_properties']['readout_window']
         num_entries = self.ws.num_entries
         return ro_win * sampling_time * num_entries
@@ -357,6 +356,7 @@ class TrgPrimitivesPlotter:
             'generator': [l if len(l) > 0 else self._electronics_noise_label for l in h_counts.axes[0]],
             col_name: h_counts[:,sum].values()
             }
+
         cols.update({
                 f"{col_name}_rop{rop}":h_counts[:,rop*1j].values() for rop in range(self.geo.num_readout_planes)
             })
@@ -434,7 +434,7 @@ class TrgPrimitivesPlotter:
         h_top = sorted([h for h in s], key=lambda x: x.sum(), reverse=True)[:n_top]
 
         if 'figsize' not in fig_kwargs:
-            fig_kwargs['fig_size'] = (8,5)
+            fig_kwargs['figsize'] = (8,5)
 
         create_fig = ax is None
         fig, ax = plt.subplots(**fig_kwargs) if create_fig else (ax.figure, ax)

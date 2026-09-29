@@ -613,5 +613,7 @@ def cut_scan_to_df(h_cs, cat_axis_name:str, cut_axis_name:str, ):
     data = {f'{cut_axis_name}_min': cuts}
 
     for k in cat:
-        data[f'{cat_axis_name}_{k}'] = h_cs[{cat_axis_name: k}].values(flow=True)
+        # Extract the values for this category and store them in a new column.
+        # Include overflow bin in the cut axis, but not underflow (hence [1:]).
+        data[f'{cat_axis_name}_{k}'] = h_cs[{cat_axis_name: k}].values(flow=True)[1:]
     return pd.DataFrame(data)

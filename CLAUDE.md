@@ -18,11 +18,11 @@ repository, single distribution, single version.
 |---|---|
 | `data/rootio/` | ROOT I/O (`NtupleReader`, `NtupleWriter`) |
 | `data/workspace.py` | `TrgDataFrame`, workspaces |
-| `data/datacatalogue.py` | YAML dataset catalogue; resolves dirs via `TPV_DATA_ROOT` |
+| `data/datacatalogue.py` | YAML dataset catalogue; resolves dirs via `DTRG_DATA_ROOT` |
 | `data/geometry/` | detector geometry + bundled JSON, loaded via `importlib.resources` |
 | `data/utils.py` | `temporary_log_level`, `pandas_backend`, `fieldswapper` |
 | `emu/tpg/`, `emu/tafinder/`, `emu/cli/` | TPG emulation, TA finding, `ta-finder` |
-| `analysis/` | `histograms`, `base`, `snn`, `tawindows`, `tpfilter`, `utils` |
+| `analysis/` | `histograms`, `base`, `snn`, `tawindows`, `tpfilter`, `utils`, `notebook` (`stop()`) |
 | `analysis/viz/` | plotters; `analysis/cli/` | `tawin-util` |
 
 ## Layering (enforced, `uv run lint-imports`)

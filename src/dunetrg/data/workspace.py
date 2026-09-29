@@ -113,6 +113,7 @@ class TriggerActivityWorkspace(TriggerAnalysisWorkspace):
         'simide_summary',
         'ta_event_selection',
         'ta_win_stats',
+        'ta_win_cluster_stats',
         'ta_clusters',
         'tps_with_cluster_flags'
     ]

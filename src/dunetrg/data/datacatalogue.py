@@ -13,7 +13,7 @@ _log = logging.getLogger(__name__)
 
 #: Environment variable that points at the data root: the directory that
 #: relative ``dataset_dir`` arguments are resolved against.
-TPV_DATA_ROOT_ENV = "TPV_DATA_ROOT"
+DTRG_DATA_ROOT_ENV = "DTRG_DATA_ROOT"
 
 
 class DatasetEntry(BaseModel):
@@ -43,16 +43,16 @@ def _resolve_dir(dataset_dir: Union[str, Path], data_root: Optional[Union[str, P
     """Resolve *dataset_dir* to an absolute, existing directory.
 
     Absolute paths are used as-is. Relative paths are resolved against
-    *data_root* if given, otherwise against the ``TPV_DATA_ROOT`` environment
+    *data_root* if given, otherwise against the ``DTRG_DATA_ROOT`` environment
     variable (the directory that is ``tpvalidator/data/`` today).
     """
     p = Path(dataset_dir)
     if not p.is_absolute():
-        root = data_root if data_root is not None else os.environ.get(TPV_DATA_ROOT_ENV)
+        root = data_root if data_root is not None else os.environ.get(DTRG_DATA_ROOT_ENV)
         if root is None:
             raise RuntimeError(
                 f"Dataset directory '{dataset_dir}' is relative, but no data root is set. "
-                f"Set the '{TPV_DATA_ROOT_ENV}' environment variable, or pass data_root= explicitly."
+                f"Set the '{DTRG_DATA_ROOT_ENV}' environment variable, or pass data_root= explicitly."
             )
         p = Path(root) / p
     if not p.exists():
@@ -66,7 +66,7 @@ def parse(dataset_dir: str, data_root: Optional[Union[str, Path]] = None) -> Dat
     """Find and parse the datacatalogue.yaml in *dataset_dir*, return a DataCatalogue.
 
     If *dataset_dir* is relative, it is resolved against *data_root* if given,
-    otherwise against the ``TPV_DATA_ROOT`` environment variable.
+    otherwise against the ``DTRG_DATA_ROOT`` environment variable.
     """
     d = _resolve_dir(dataset_dir, data_root)
     cfg_file = d / "datacatalogue.yaml"

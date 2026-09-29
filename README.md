@@ -47,9 +47,9 @@ both contain `test_utils.py`.
 
 ## Data
 
-Datasets are located through `TPV_DATA_ROOT`, which points at the data
+Datasets are located through `DTRG_DATA_ROOT`, which points at the data
 directory itself, so `dunetrg.data.datacatalogue.load('vd/1x8x14/preprod')`
-reads `$TPV_DATA_ROOT/vd/1x8x14/preprod/`, where that dataset's
+reads `$DTRG_DATA_ROOT/vd/1x8x14/preprod/`, where that dataset's
 `datacatalogue.yaml` lives. Pass `data_root=` to override it per call.
 
 ## Origin
