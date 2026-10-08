@@ -473,3 +473,112 @@ class TrgPrimitivesPlotter:
             fig.tight_layout()
         return fig
 
+
+    def _top_generator_groups(self, df: pd.DataFrame, n_top: Optional[int] = None) -> list[tuple[str, pd.DataFrame]]:
+        """Split *df* by ``bt_generator_name`` and rank the groups by size.
+
+        Parameters
+        ----------
+        df:
+            TP dataframe containing the ``bt_generator_name`` column.
+        n_top:
+            If given, keep only the *n_top* most populous generators.
+
+        Returns
+        -------
+        list of ``(generator_name, dataframe)`` tuples, largest group first.
+        """
+        groups = sorted(df.groupby('bt_generator_name'), key=lambda x: len(x[1]), reverse=True)
+        return groups[:n_top] if n_top is not None else groups
+
+
+    def plot_origin_projections_by_generator(self,
+                                             rop: int = 2,
+                                             n_top: int = 10,
+                                             query: Optional[str] = None,
+                                             cmap: str = 'tab10',
+                                             colors: Optional[list[int]] = None,
+                                             alpha: float = 0.01,
+                                             s: float = 1,
+                                             **fig_kwargs
+        ):
+        """Plot the 2D projections of the backtracked TP point of origin, by generator.
+
+        Produces a 2×2 grid with the Y-X, Z-X and Y-Z projections of
+        ``bt_primary_{x,y,z}``; the fourth panel hosts the legend. Only
+        backtracked (signal) TPs are used, as noise TPs have no origin.
+
+        Parameters
+        ----------
+        rop:
+            Readout-plane index to select.
+        n_top:
+            Number of top generators to show, ranked by TP counts (default 10).
+        query:
+            Optional pandas query string applied before grouping.
+        cmap:
+            Name of the matplotlib colormap used for the generators.
+        colors:
+            Optional colormap indices, one per generator rank. Defaults to
+            ``range(n_top)``.
+        alpha:
+            Marker transparency.
+        s:
+            Marker size.
+        **fig_kwargs:
+            Extra keyword arguments forwarded to ``plt.subplots``.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        from matplotlib.patches import Patch
+
+        df = self._df.query(f'(bt_is_signal == 1) & (readout_plane_id == {rop})')
+        if query:
+            df = df.query(query)
+
+        groups = self._top_generator_groups(df, n_top)
+
+        cm = plt.get_cmap(cmap)
+        if colors is None:
+            colors = list(range(len(groups)))
+        if len(colors) < len(groups):
+            raise ValueError(f"Not enough colors ({len(colors)}) for {len(groups)} generators")
+        gen_colors = [cm(c) for c in colors[:len(groups)]]
+
+        if 'figsize' not in fig_kwargs:
+            fig_kwargs['figsize'] = (8, 8)
+        fig_kwargs.setdefault('layout', 'constrained')
+
+        fig, axes = plt.subplots(2, 2, **fig_kwargs)
+
+        labels = {
+            'bt_primary_x': 'x (drift) [cm]',
+            'bt_primary_y': 'y [cm]',
+            'bt_primary_z': 'z (beam) [cm]',
+        }
+        projections = [
+            (axes[0][0], 'bt_primary_y', 'bt_primary_x', 'Y-X view'),
+            (axes[0][1], 'bt_primary_z', 'bt_primary_x', 'Z-X view'),
+            (axes[1][0], 'bt_primary_y', 'bt_primary_z', 'Y-Z view'),
+        ]
+
+        for ax, x_var, y_var, title in projections:
+            # Draw the smallest groups last, so they are not hidden by the largest ones
+            for (name, g_df), color in reversed(list(zip(groups, gen_colors))):
+                ax.scatter(g_df[x_var], g_df[y_var], alpha=alpha, color=color, s=s, rasterized=True)
+            ax.set_xlabel(labels[x_var])
+            ax.set_ylabel(labels[y_var])
+            ax.set_title(title)
+
+        ax = axes[1][1]
+        ax.set_axis_off()
+
+        # Opaque proxy entries: the scatter markers are too transparent to be legible
+        legend_handles = [Patch(facecolor=color, label=name) for (name, _), color in zip(groups, gen_colors)]
+        ax.legend(handles=legend_handles, loc='center', frameon=False)
+
+        fig.suptitle(f"Backtracked TP point of origin by generator - Plane {rop}")
+        return fig
+
